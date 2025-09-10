@@ -30,6 +30,9 @@ impl Default for AppConfig {
                 "Mail.Read".to_string(),
                 "Mail.ReadWrite".to_string(),
                 "Mail.Send".to_string(),
+                // Calendar scopes for new calendar/event features
+                "Calendars.Read".to_string(),
+                "Calendars.ReadWrite".to_string(),
             ],
         }
     }
@@ -39,7 +42,7 @@ impl Default for AppConfig {
 #[command(
     version,
     about = "Tiny Outlook/Graph CLI (Rust)",
-    long_about = "mdmailcli is a small CLI for Microsoft Graph mail.\n\nAuthentication:\n- Uses device code flow with a public client app registration\n- Stores config and refresh token in your OS keyring\n  - Service: outlook-graph-cli\n  - Accounts: config (JSON), refresh_token\n\nQuick start:\n- Run `init` to enter tenant, client_id, and scopes, then sign in\n- Use `whoami`, `folders list`, `messages list`, `messages search`, or `send`\n\nTip: This tool is often called by other apps (e.g., via MCP servers). All configuration is discoverable via this help and `init` prompts."
+    long_about = "mdmailcli is a small CLI for Microsoft Graph mail and calendars.\n\nAuthentication:\n- Uses device code flow with a public client app registration\n- Stores config and refresh token in your OS keyring\n  - Service: outlook-graph-cli\n  - Accounts: config (JSON), refresh_token\n\nQuick start:\n- Run `init` to enter tenant, client_id, and scopes, then sign in\n- Use `whoami`, `folders list`, `messages list`, `messages search`, `send`,\n  or calendar commands like `calendars list`, `events list`, `events create`.\n\nTip: This tool is often called by other apps (e.g., via MCP servers). All configuration is discoverable via this help and `init` prompts."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -80,6 +83,18 @@ enum Commands {
         /// Treat body as HTML
         #[arg(long, default_value_t = false)]
         html: bool,
+    },
+
+    /// Calendar container operations
+    Calendars {
+        #[command(subcommand)]
+        cmd: CalendarCmd,
+    },
+
+    /// Calendar event operations
+    Events {
+        #[command(subcommand)]
+        cmd: EventCmd,
     },
 }
 
@@ -156,6 +171,68 @@ enum Sort {
     DateAsc,
 }
 
+#[derive(Subcommand)]
+enum CalendarCmd {
+    /// List calendars (id and name)
+    List {
+        /// Number of calendars to return
+        #[arg(long, default_value_t = 20)]
+        top: u32,
+    },
+}
+
+#[derive(Subcommand)]
+enum EventCmd {
+    /// List events from a calendar (primary by default), soonest first
+    List {
+        /// Calendar display name (omit to use primary)
+        #[arg(long)]
+        calendar: Option<String>,
+        /// Start of date range (ISO8601). When set, --end is required.
+        #[arg(long, value_name = "ISO8601")]
+        start: Option<String>,
+        /// End of date range (ISO8601). When set, --start is required.
+        #[arg(long, value_name = "ISO8601")]
+        end: Option<String>,
+        /// Time zone for returned start/end (e.g., UTC, Pacific Standard Time)
+        #[arg(long, default_value = "UTC")]
+        tz: String,
+        /// Number of events
+        #[arg(long, default_value_t = 10)]
+        top: u32,
+    },
+    /// Create a calendar event (on primary or named calendar)
+    Create {
+        /// Subject for the event
+        #[arg(long)]
+        subject: String,
+        /// Start time (ISO8601, e.g., 2025-09-10T09:00:00)
+        #[arg(long, value_name = "ISO8601")]
+        start: String,
+        /// End time (ISO8601, e.g., 2025-09-10T10:00:00)
+        #[arg(long, value_name = "ISO8601")]
+        end: String,
+        /// Time zone for start/end (e.g., UTC, Pacific Standard Time)
+        #[arg(long, default_value = "UTC")]
+        tz: String,
+        /// Optional plain or HTML body
+        #[arg(long)]
+        body: Option<String>,
+        /// Treat body as HTML
+        #[arg(long, default_value_t = false)]
+        html: bool,
+        /// One or more attendee email addresses
+        #[arg(long = "attendee")] 
+        attendees: Vec<String>,
+        /// Optional location display name
+        #[arg(long)]
+        location: Option<String>,
+        /// Target calendar by display name (omit to use primary)
+        #[arg(long)]
+        calendar: Option<String>,
+    },
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -165,6 +242,100 @@ async fn main() -> Result<()> {
             ensure_login(true).await?; // force interactive if needed
             println!("✅ Initialized and signed in.");
         }
+        Commands::Calendars { cmd } => match cmd {
+            CalendarCmd::List { top } => {
+                let token = ensure_login(false).await?;
+                let url = format!(
+                    "/v1.0/me/calendars?$select=id,name,canEdit,canShare,owner&$top={}",
+                    top
+                );
+                let json = graph_get_json(&token, &url).await?;
+                println!("{}", serde_json::to_string_pretty(&json)?);
+            }
+        },
+        Commands::Events { cmd } => match cmd {
+            EventCmd::List { calendar, start, end, tz, top } => {
+                let token = ensure_login(false).await?;
+                // Build headers (timezone preference)
+                let prefer = format!("outlook.timezone=\"{}\"", tz);
+                let headers: Vec<(&str, &str)> = vec![("Prefer", prefer.as_str())];
+
+                // Decide endpoint: calendarView when both start+end provided, else events
+                if (start.is_some() && end.is_none()) || (start.is_none() && end.is_some()) {
+                    return Err(anyhow!("--start and --end must be provided together for date-range listing"));
+                }
+
+                let base = if let Some(name) = calendar {
+                    let cal_id = resolve_calendar_id(&token, &name).await?;
+                    (format!("/v1.0/me/calendars/{}", cal_id), true)
+                } else {
+                    ("/v1.0/me/calendar".to_string(), false)
+                };
+
+                let mut qp: Vec<(&str, String)> = Vec::new();
+                qp.push(("$select", "subject,organizer,start,end,location,webLink,isAllDay".to_string()));
+                qp.push(("$orderby", "start/dateTime asc".to_string()));
+                qp.push(("$top", top.to_string()));
+
+                let path = if start.is_some() && end.is_some() {
+                    // calendarView requires both startDateTime and endDateTime
+                    qp.push(("startDateTime", start.clone().unwrap()));
+                    qp.push(("endDateTime", end.clone().unwrap()));
+                    format!("{}/calendarView", base.0)
+                } else {
+                    format!("{}/events", base.0)
+                };
+
+                let json = graph_get_json_with_headers_and_query(&token, &path, &headers, &qp).await?;
+                println!("{}", serde_json::to_string_pretty(&json)?);
+            }
+            EventCmd::Create {
+                subject,
+                start,
+                end,
+                tz,
+                body,
+                html,
+                attendees,
+                location,
+                calendar,
+            } => {
+                let token = ensure_login(false).await?;
+                let payload = build_event_payload(
+                    &subject,
+                    &start,
+                    &end,
+                    &tz,
+                    body.as_deref(),
+                    html,
+                    &attendees,
+                    location.as_deref(),
+                );
+                let url = if let Some(name) = calendar {
+                    let cal_id = resolve_calendar_id(&token, &name).await?;
+                    format!("{}/v1.0/me/calendars/{}/events", GRAPH_RESOURCE, cal_id)
+                } else {
+                    format!("{}/v1.0/me/events", GRAPH_RESOURCE)
+                };
+
+                let res = reqwest::Client::new()
+                    .post(&url)
+                    .bearer_auth(&token)
+                    .json(&payload)
+                    .send()
+                    .await
+                    .context("POST event failed")?;
+
+                if res.status().is_success() || res.status() == StatusCode::CREATED {
+                    let created = res.json::<serde_json::Value>().await.unwrap_or_else(|_| serde_json::json!({"status":"created"}));
+                    println!("{}", serde_json::to_string_pretty(&created)?);
+                } else {
+                    let status = res.status();
+                    let text = res.text().await.unwrap_or_default();
+                    return Err(anyhow!("create event error: {} — {}", status, text));
+                }
+            }
+        },
         Commands::Whoami => {
             let token = ensure_login(false).await?;
             let me = graph_get_json(&token, "/v1.0/me").await?;
@@ -454,7 +625,7 @@ fn prompt_for_config(mut cfg: AppConfig) -> Result<AppConfig> {
     cfg.client_id = c.to_string();
 
     // Scopes
-    println!("Scopes (space-separated). Typical: offline_access User.Read Mail.Read Mail.ReadWrite Mail.Send");
+    println!("Scopes (space-separated). Typical: offline_access User.Read Mail.Read Mail.ReadWrite Mail.Send Calendars.Read Calendars.ReadWrite");
     println!("Default: {}", cfg.scopes.join(" "));
     print!("scopes> ");
     io::stdout().flush().ok();
@@ -845,4 +1016,77 @@ fn build_send_payload(to: &[String], subject: &str, body: &str, html: bool) -> s
         },
         "saveToSentItems": true
     })
+}
+
+async fn resolve_calendar_id(access_token: &str, display_name: &str) -> Result<String> {
+    // Treat common aliases as primary
+    if display_name.eq_ignore_ascii_case("primary")
+        || display_name.eq_ignore_ascii_case("default")
+        || display_name.eq_ignore_ascii_case("calendar")
+    {
+        let v = graph_get_json(access_token, "/v1.0/me/calendar?$select=id").await?;
+        if let Some(id) = v.get("id").and_then(|s| s.as_str()) {
+            return Ok(id.to_string());
+        }
+    }
+
+    // Fallback: enumerate calendars and match by name
+    let v = graph_get_json(access_token, "/v1.0/me/calendars?$select=id,name&$top=100").await?;
+    if let Some(arr) = v.get("value").and_then(|x| x.as_array()) {
+        if let Some(hit) = arr.iter().find(|c| {
+            c.get("name")
+                .and_then(|s| s.as_str())
+                .map(|s| s.eq_ignore_ascii_case(display_name))
+                .unwrap_or(false)
+        }) {
+            if let Some(id) = hit.get("id").and_then(|s| s.as_str()) {
+                return Ok(id.to_string());
+            }
+        }
+    }
+
+    Err(anyhow!("Calendar '{}' not found", display_name))
+}
+
+fn build_event_payload(
+    subject: &str,
+    start: &str,
+    end: &str,
+    tz: &str,
+    body: Option<&str>,
+    html: bool,
+    attendees: &[String],
+    location: Option<&str>,
+) -> serde_json::Value {
+    let attendee_list: Vec<serde_json::Value> = attendees
+        .iter()
+        .map(|addr| {
+            serde_json::json!({
+                "emailAddress": { "address": addr },
+                "type": "required"
+            })
+        })
+        .collect();
+
+    let content_type = if html { "HTML" } else { "Text" };
+    let body_obj = body.map(|b| serde_json::json!({ "contentType": content_type, "content": b })).unwrap_or_else(|| serde_json::json!({ "contentType": content_type, "content": "" }));
+
+    let mut ev = serde_json::json!({
+        "subject": subject,
+        "body": body_obj,
+        "start": { "dateTime": start, "timeZone": tz },
+        "end":   { "dateTime": end,   "timeZone": tz },
+        "attendees": attendee_list,
+    });
+
+    if let Some(loc) = location {
+        if let Some(obj) = ev.as_object_mut() {
+            obj.insert(
+                "location".to_string(),
+                serde_json::json!({ "displayName": loc }),
+            );
+        }
+    }
+
+    ev
 }

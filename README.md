@@ -1,6 +1,6 @@
 # mdmailcli — Tiny Outlook/Graph CLI
 
-A minimal command‑line tool to work with Microsoft Graph mailboxes. It supports device‑code sign‑in, stores config + refresh tokens in the OS keyring, and provides simple subcommands to list folders and messages, inspect your identity, and send mail.
+A minimal command‑line tool to work with Microsoft Graph mailboxes and calendars. It supports device‑code sign‑in, stores config + refresh tokens in the OS keyring, and provides simple subcommands to list folders and messages, inspect your identity, send mail, and work with calendars/events.
 
 - Auth: Microsoft Identity device code flow (public client)
 - Storage: OS keyring via `keyring` crate
@@ -36,9 +36,11 @@ This tool uses the device code flow and requires an app registration configured 
 - Add at least:
   - `offline_access`
   - `User.Read`
-  - `Mail.Read`
-  - `Mail.ReadWrite`
-  - `Mail.Send`
+ - `Mail.Read`
+ - `Mail.ReadWrite`
+ - `Mail.Send`
+  - `Calendars.Read`
+  - `Calendars.ReadWrite`
 - Click "Grant admin consent" if your tenant requires it.
 
 4) Collect the following
@@ -54,7 +56,7 @@ Run interactive init to store config and sign in:
 Prompts:
 - `tenant` → default is `common`; set to your tenant ID or domain if single‑tenant
 - `client_id` → paste your app registration's Application (client) ID
-- `scopes` → default: `offline_access User.Read Mail.Read Mail.ReadWrite Mail.Send`
+- `scopes` → default: `offline_access User.Read Mail.Read Mail.ReadWrite Mail.Send Calendars.Read Calendars.ReadWrite`
 
 The tool then shows a verification URL and code. Open the URL, enter the code, and complete sign‑in. On success, it validates with `GET /me` and stores a refresh token.
 
@@ -72,6 +74,20 @@ Where it stores data (OS keyring):
   - `cargo run -- send --to user@example.com --subject "Hello" --body "Hi there"`
 - Send mail (HTML body):
   - `cargo run -- send --to user@example.com --subject "Hello" --body "<b>Hi</b>" --html`
+
+### Calendars & Events
+
+- List calendars: `cargo run -- calendars list --top 20`
+- List events (primary): `cargo run -- events list --top 10`
+- List events (named): `cargo run -- events list --calendar "Team Calendar" --top 10`
+- List events in a date range (primary):
+  - `cargo run -- events list --start 2025-09-10T00:00:00 --end 2025-09-11T00:00:00 --tz UTC --top 50`
+- List events in a date range (named calendar):
+  - `cargo run -- events list --calendar "Team Calendar" --start 2025-09-10T00:00:00 --end 2025-09-15T00:00:00 --tz "Pacific Standard Time" --top 50`
+- Create event on primary calendar:
+  - `cargo run -- events create --subject "Sync" --start 2025-09-10T09:00:00 --end 2025-09-10T09:30:00 --tz UTC --attendee alice@example.com --attendee bob@example.com --location "Conf Rm 1"`
+- Create event on a named calendar:
+  - `cargo run -- events create --calendar "Team Calendar" --subject "Planning" --start 2025-09-12T13:00:00 --end 2025-09-12T14:00:00 --tz "Pacific Standard Time" --body "Quarterly planning" --html`
 
 ### Search
 
@@ -94,6 +110,8 @@ Common flags:
 Notes:
 - If you haven’t run `init`, most commands will prompt you to authenticate.
 - Access tokens auto‑refresh using the stored refresh token.
+ - For events, primary calendar is used by default. Use `--calendar <name>` to target a specific calendar (case‑insensitive). Common aliases like `primary`, `default`, or `calendar` resolve to the primary calendar.
+  - For date‑range listing, both `--start` and `--end` are required and use the `calendarView` endpoint. The `--tz` flag controls the returned time zone (header `Prefer: outlook.timezone="..."`).
 
 ## Troubleshooting
 
