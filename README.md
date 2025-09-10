@@ -36,9 +36,12 @@ This tool uses the device code flow and requires an app registration configured 
 - Add at least:
   - `offline_access`
   - `User.Read`
- - `Mail.Read`
- - `Mail.ReadWrite`
- - `Mail.Send`
+  - `Mail.Read`
+  - `Mail.ReadWrite`
+  - `Mail.Send`
+  - `Calendars.Read`
+  - `Calendars.ReadWrite`
+  - `Calendars.Read.Shared`
   - `Calendars.Read`
   - `Calendars.ReadWrite`
 - Click "Grant admin consent" if your tenant requires it.
@@ -58,12 +61,12 @@ Reconfigure or add scopes later:
 - Force re-prompt (tenant, client_id, scopes prefilled):
   - `cargo run -- init --force`
 - Set scopes non-interactively (keeps tenant/client_id):
-  - `cargo run -- init --scopes "offline_access User.Read Mail.Read Mail.ReadWrite Mail.Send Calendars.Read Calendars.ReadWrite"`
+  - `cargo run -- init --scopes "offline_access User.Read Mail.Read Mail.ReadWrite Mail.Send Calendars.Read Calendars.ReadWrite Calendars.Read.Shared"`
 
 Prompts:
 - `tenant` → default is `common`; set to your tenant ID or domain if single‑tenant
 - `client_id` → paste your app registration's Application (client) ID
-- `scopes` → default: `offline_access User.Read Mail.Read Mail.ReadWrite Mail.Send Calendars.Read Calendars.ReadWrite`
+- `scopes` → default: `offline_access User.Read Mail.Read Mail.ReadWrite Mail.Send Calendars.Read Calendars.ReadWrite Calendars.Read.Shared`
 
 The tool then shows a verification URL and code. Open the URL, enter the code, and complete sign‑in. On success, it validates with `GET /me` and stores a refresh token.
 
@@ -96,6 +99,13 @@ Where it stores data (OS keyring):
 - Create event on a named calendar:
   - `cargo run -- events create --calendar "Team Calendar" --subject "Planning" --start 2025-09-12T13:00:00 --end 2025-09-12T14:00:00 --tz "Pacific Standard Time" --body "Quarterly planning" --html`
 
+#### Free/Busy (Scheduling)
+
+- Get free/busy for users (UTC):
+  - `cargo run -- events busy --start 2025-09-10T09:00:00 --end 2025-09-10T18:00:00 --tz UTC --user alice@contoso.com --user bob@contoso.com`
+- Adjust interval granularity:
+  - `cargo run -- events busy --start 2025-09-10T09:00:00 --end 2025-09-10T18:00:00 --tz "Pacific Standard Time" --interval 60 --user team@contoso.com`
+
 ### Search
 
 Two modes:
@@ -118,8 +128,9 @@ Notes:
 - If you haven’t run `init`, most commands will prompt you to authenticate.
 - Access tokens auto‑refresh using the stored refresh token.
   - For events, primary calendar is used by default. Use `--calendar <name>` to target a specific calendar (case‑insensitive). Common aliases like `primary`, `default`, or `calendar` resolve to the primary calendar.
-  - For date‑range listing, both `--start` and `--end` are required and use the `calendarView` endpoint. The `--tz` flag controls the returned time zone (header `Prefer: outlook.timezone="..."`).
+ - For date‑range listing, both `--start` and `--end` are required and use the `calendarView` endpoint. The `--tz` flag controls the returned time zone (header `Prefer: outlook.timezone="..."`).
  - To add calendar permissions after first run, either re-init with `--force` (interactive) or set scopes directly with `--scopes` and run `init` to trigger consent.
+ - To read shared calendars or other users’ schedules, include `Calendars.Read.Shared` in scopes. For minimal scheduling-only access, you can use `Calendars.Read Calendars.Read.Shared` (omit mail scopes).
 
 ## Troubleshooting
 

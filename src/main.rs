@@ -33,6 +33,8 @@ impl Default for AppConfig {
                 // Calendar scopes for new calendar/event features
                 "Calendars.Read".to_string(),
                 "Calendars.ReadWrite".to_string(),
+                // Shared calendars read access by default
+                "Calendars.Read.Shared".to_string(),
             ],
         }
     }
@@ -42,7 +44,7 @@ impl Default for AppConfig {
 #[command(
     version,
     about = "Tiny Outlook/Graph CLI (Rust)",
-    long_about = "mdmailcli is a small CLI for Microsoft Graph mail and calendars.\n\nAuthentication:\n- Uses device code flow with a public client app registration\n- Stores config and refresh token in your OS keyring\n  - Service: outlook-graph-cli\n  - Accounts: config (JSON), refresh_token\n\nQuick start:\n- Run `init` to enter tenant, client_id, and scopes, then sign in\n- Use `whoami`, `folders list`, `messages list`, `messages search`, `send`,\n  or calendar commands like `calendars list`, `events list`, `events create`.\n\nTip: This tool is often called by other apps (e.g., via MCP servers). All configuration is discoverable via this help and `init` prompts."
+    long_about = "mdmailcli is a small CLI for Microsoft Graph mail and calendars.\n\nAuthentication:\n- Uses device code flow with a public client app registration\n- Stores config and refresh token in your OS keyring\n  - Service: outlook-graph-cli\n  - Accounts: config (JSON), refresh_token\n\nQuick start:\n- Run `init` to enter tenant, client_id, and scopes, then sign in\n- Use `whoami`, `folders list`, `messages list`, `messages search`, `send`,\n  or calendar commands like `calendars list`, `events list`, `events create`, `events busy`.\n\nTip: This tool is often called by other apps (e.g., via MCP servers). All configuration is discoverable via this help and `init` prompts."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -243,6 +245,24 @@ enum EventCmd {
         #[arg(long)]
         calendar: Option<String>,
     },
+    /// Get free/busy schedule for users within a time range
+    Busy {
+        /// Start time (ISO8601, e.g., 2025-09-10T09:00:00)
+        #[arg(long, value_name = "ISO8601")]
+        start: String,
+        /// End time (ISO8601, e.g., 2025-09-10T10:00:00)
+        #[arg(long, value_name = "ISO8601")]
+        end: String,
+        /// Time zone for start/end and returned data (e.g., UTC, Pacific Standard Time)
+        #[arg(long, default_value = "UTC")]
+        tz: String,
+        /// One or more user email addresses to check (repeatable)
+        #[arg(long = "user")]
+        users: Vec<String>,
+        /// Availability view interval in minutes (e.g., 15, 30, 60)
+        #[arg(long, default_value_t = 30)]
+        interval: i32,
+    },
 }
 
 #[tokio::main]
@@ -315,6 +335,23 @@ async fn main() -> Result<()> {
                 };
 
                 let json = graph_get_json_with_headers_and_query(&token, &path, &headers, &qp).await?;
+                println!("{}", serde_json::to_string_pretty(&json)?);
+            }
+            EventCmd::Busy { start, end, tz, users, interval } => {
+                if users.is_empty() {
+                    return Err(anyhow!("Provide at least one --user email"));
+                }
+                let token = ensure_login(false).await?;
+                let path = "/v1.0/me/calendar/getSchedule";
+                let prefer = format!("outlook.timezone=\"{}\"", tz);
+                let headers: Vec<(&str, &str)> = vec![("Prefer", prefer.as_str())];
+                let payload = serde_json::json!({
+                    "schedules": users,
+                    "startTime": { "dateTime": start, "timeZone": tz },
+                    "endTime":   { "dateTime": end,   "timeZone": tz },
+                    "availabilityViewInterval": interval,
+                });
+                let json = graph_post_json_with_headers(&token, path, &headers, &payload).await?;
                 println!("{}", serde_json::to_string_pretty(&json)?);
             }
             EventCmd::Create {
@@ -986,6 +1023,31 @@ fn collect_items(out: &mut Vec<serde_json::Value>, json: &mut serde_json::Value)
         for v in arr.drain(..) {
             out.push(v);
         }
+    }
+}
+
+async fn graph_post_json_with_headers(
+    access_token: &str,
+    path: &str,
+    headers: &[(&str, &str)],
+    payload: &serde_json::Value,
+) -> Result<serde_json::Value> {
+    let url = format!("{}{}", GRAPH_RESOURCE, path);
+    let client = reqwest::Client::new();
+    let mut req = client.post(&url).bearer_auth(access_token).json(payload);
+    for (k, v) in headers {
+        req = req.header(*k, *v);
+    }
+    let res = req.send().await.with_context(|| format!("POST {} failed", path))?;
+    if res.status().is_success() {
+        Ok(res.json().await.context("parse JSON")?)
+    } else if res.status() == StatusCode::UNAUTHORIZED {
+        let text = res.text().await.unwrap_or_default();
+        Err(anyhow!("401 Unauthorized: {}", text))
+    } else {
+        let status = res.status();
+        let text = res.text().await.unwrap_or_default();
+        Err(anyhow!("Graph error {}: {}", status, text))
     }
 }
 
