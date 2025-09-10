@@ -42,8 +42,6 @@ This tool uses the device code flow and requires an app registration configured 
   - `Calendars.Read`
   - `Calendars.ReadWrite`
   - `Calendars.Read.Shared`
-  - `Calendars.Read`
-  - `Calendars.ReadWrite`
 - Click "Grant admin consent" if your tenant requires it.
 
 4) Collect the following
@@ -77,40 +75,40 @@ Where it stores data (OS keyring):
 ## Usage
 
 - Identity: `cargo run -- whoami`
-- List folders: `cargo run -- folders list --top 20`
-- List messages: `cargo run -- messages list --folder "Inbox" --top 10`
-- Get a message: `cargo run -- messages get <message_id>`
+- List folders: `cargo run -- folders-list --top 20`
+- List messages: `cargo run -- messages-list --folder "Inbox" --top 10`
+- Get a message: `cargo run -- messages-get <message_id>`
 - Send mail (text):
-  - `cargo run -- send --to user@example.com --subject "Hello" --body "Hi there"`
+  - `cargo run -- send-mail --to user@example.com --subject "Hello" --body "Hi there"`
 - Send mail (HTML body):
-  - `cargo run -- send --to user@example.com --subject "Hello" --body "<b>Hi</b>" --html`
+  - `cargo run -- send-mail --to user@example.com --subject "Hello" --body "<b>Hi</b>" --html`
 
 ### Calendars & Events
 
-- List calendars: `cargo run -- calendars list --top 20`
-- List events (primary): `cargo run -- events list --top 10`
-- List events (named): `cargo run -- events list --calendar "Team Calendar" --top 10`
+- List calendars: `cargo run -- calendars-list --top 20`
+- List events (primary): `cargo run -- events-list --top 10`
+- List events (named): `cargo run -- events-list --calendar "Team Calendar" --top 10`
 - List events in a date range (primary):
-  - `cargo run -- events list --start 2025-09-10T00:00:00 --end 2025-09-11T00:00:00 --tz UTC --top 50`
+  - `cargo run -- events-list --start 2025-09-10T00:00:00 --end 2025-09-11T00:00:00 --tz UTC --top 50`
 - List events in a date range (named calendar):
-  - `cargo run -- events list --calendar "Team Calendar" --start 2025-09-10T00:00:00 --end 2025-09-15T00:00:00 --tz "Pacific Standard Time" --top 50`
+  - `cargo run -- events-list --calendar "Team Calendar" --start 2025-09-10T00:00:00 --end 2025-09-15T00:00:00 --tz "Pacific Standard Time" --top 50`
 - Create event on primary calendar:
-  - `cargo run -- events create --subject "Sync" --start 2025-09-10T09:00:00 --end 2025-09-10T09:30:00 --tz UTC --attendee alice@example.com --attendee bob@example.com --location "Conf Rm 1"`
+  - `cargo run -- events-create --subject "Sync" --start 2025-09-10T09:00:00 --end 2025-09-10T09:30:00 --tz UTC --attendee alice@example.com --attendee bob@example.com --location "Conf Rm 1"`
 - Create event on a named calendar:
-  - `cargo run -- events create --calendar "Team Calendar" --subject "Planning" --start 2025-09-12T13:00:00 --end 2025-09-12T14:00:00 --tz "Pacific Standard Time" --body "Quarterly planning" --html`
+  - `cargo run -- events-create --calendar "Team Calendar" --subject "Planning" --start 2025-09-12T13:00:00 --end 2025-09-12T14:00:00 --tz "Pacific Standard Time" --body "Quarterly planning" --html`
 
 #### Free/Busy (Scheduling)
 
 - Get free/busy for users (UTC):
-  - `cargo run -- events busy --start 2025-09-10T09:00:00 --end 2025-09-10T18:00:00 --tz UTC --user alice@contoso.com --user bob@contoso.com`
+  - `cargo run -- events-busy --start 2025-09-10T09:00:00 --end 2025-09-10T18:00:00 --tz UTC --user alice@contoso.com --user bob@contoso.com`
 - Adjust interval granularity:
-  - `cargo run -- events busy --start 2025-09-10T09:00:00 --end 2025-09-10T18:00:00 --tz "Pacific Standard Time" --interval 60 --user team@contoso.com`
+  - `cargo run -- events-busy --start 2025-09-10T09:00:00 --end 2025-09-10T18:00:00 --tz "Pacific Standard Time" --interval 60 --user team@contoso.com`
 
 ### Search
 
 Two modes:
-- `$search` full‑text: `cargo run -- messages search --all --query "from:alice@contoso.com AND subject:invoice"`
-- `$filter` structured: `cargo run -- messages search --unread --since 2024-09-01T00:00:00Z`
+- `$search` full‑text: `cargo run -- messages-search --all --query "from:alice@contoso.com AND subject:invoice"`
+- `$filter` structured: `cargo run -- messages-search --unread --since 2024-09-01T00:00:00Z`
 
 Notes about Graph constraints:
 - When using `$search`, Graph does not allow `$orderby`. The CLI omits it to avoid `SearchWithOrderBy` errors; results may be relevance‑ordered.
