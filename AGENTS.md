@@ -36,3 +36,8 @@
 ## Agent-Specific Instructions
 - Make minimal, targeted changes; do not refactor unrelated areas.
 - Follow the above commands and style. If adding features, include tests and update this guide as needed.
+
+## Quality Gates
+- All code must compile cleanly without warnings (`cargo build`).
+- Formatting must be clean (`cargo fmt --all` produces no diffs).
+- Clippy must be clean (`cargo clippy --all-targets --all-features -D warnings`).

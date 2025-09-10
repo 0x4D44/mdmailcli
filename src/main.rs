@@ -81,7 +81,10 @@ enum Commands {
         top: u32,
     },
 
-    #[command(name = "messages-list", about = "List messages in a folder (newest first)")]
+    #[command(
+        name = "messages-list",
+        about = "List messages in a folder (newest first)"
+    )]
     MessagesList {
         /// Folder display name, e.g. Inbox, Sent Items, Archive
         #[arg(long, default_value = "Inbox")]
@@ -92,9 +95,7 @@ enum Commands {
     },
 
     #[command(name = "messages-get", about = "Get a single message by id")]
-    MessagesGet {
-        id: String,
-    },
+    MessagesGet { id: String },
 
     #[command(
         name = "messages-search",
@@ -137,7 +138,6 @@ enum Commands {
         sort: Sort,
     },
     // messages-search temporarily removed in flat mode refactor; will add back after stabilization
-
     #[command(name = "send-mail", about = "Send a simple email")]
     SendMail {
         /// One or more recipients (email addresses)
@@ -209,7 +209,7 @@ enum Commands {
         #[arg(long, default_value_t = false)]
         html: bool,
         /// One or more attendee email addresses
-        #[arg(long = "attendee")] 
+        #[arg(long = "attendee")]
         attendees: Vec<String>,
         /// Optional location display name
         #[arg(long)]
@@ -263,10 +263,8 @@ async fn main() -> Result<()> {
             if scopes.is_some() || force {
                 let mut cfg = load_config()?;
                 if let Some(s) = scopes {
-                    let new_scopes: Vec<String> = s
-                        .split_whitespace()
-                        .map(|x| x.to_string())
-                        .collect();
+                    let new_scopes: Vec<String> =
+                        s.split_whitespace().map(|x| x.to_string()).collect();
                     cfg.scopes = new_scopes;
                 }
                 if force {
@@ -277,7 +275,7 @@ async fn main() -> Result<()> {
             }
             ensure_login(true).await?; // device code login (fresh consent if scopes changed)
             println!("✅ Initialized and signed in.");
-        },
+        }
         Commands::CalendarsList { top } => {
             let token = ensure_login(false).await?;
             let url = format!(
@@ -286,111 +284,132 @@ async fn main() -> Result<()> {
             );
             let json = graph_get_json(&token, &url).await?;
             println!("{}", serde_json::to_string_pretty(&json)?);
-        },
-        Commands::EventsList { calendar, start, end, tz, top } => {
-                let token = ensure_login(false).await?;
-                // Build headers (timezone preference)
-                let prefer = format!("outlook.timezone=\"{}\"", tz);
-                let headers: Vec<(&str, &str)> = vec![("Prefer", prefer.as_str())];
+        }
+        Commands::EventsList {
+            calendar,
+            start,
+            end,
+            tz,
+            top,
+        } => {
+            let token = ensure_login(false).await?;
+            // Build headers (timezone preference)
+            let prefer = format!("outlook.timezone=\"{}\"", tz);
+            let headers: Vec<(&str, &str)> = vec![("Prefer", prefer.as_str())];
 
-                // Decide endpoint: calendarView when both start+end provided, else events
-                if (start.is_some() && end.is_none()) || (start.is_none() && end.is_some()) {
-                    return Err(anyhow!("--start and --end must be provided together for date-range listing"));
-                }
+            // Decide endpoint: calendarView when both start+end provided, else events
+            if (start.is_some() && end.is_none()) || (start.is_none() && end.is_some()) {
+                return Err(anyhow!(
+                    "--start and --end must be provided together for date-range listing"
+                ));
+            }
 
-                let base = if let Some(name) = calendar {
-                    let cal_id = resolve_calendar_id(&token, &name).await?;
-                    (format!("/v1.0/me/calendars/{}", cal_id), true)
-                } else {
-                    ("/v1.0/me/calendar".to_string(), false)
-                };
+            let base = if let Some(name) = calendar {
+                let cal_id = resolve_calendar_id(&token, &name).await?;
+                (format!("/v1.0/me/calendars/{}", cal_id), true)
+            } else {
+                ("/v1.0/me/calendar".to_string(), false)
+            };
 
-                let mut qp: Vec<(&str, String)> = Vec::new();
-                qp.push(("$select", "subject,organizer,start,end,location,webLink,isAllDay".to_string()));
-                qp.push(("$orderby", "start/dateTime asc".to_string()));
-                qp.push(("$top", top.to_string()));
+            let mut qp: Vec<(&str, String)> = Vec::new();
+            qp.push((
+                "$select",
+                "subject,organizer,start,end,location,webLink,isAllDay".to_string(),
+            ));
+            qp.push(("$orderby", "start/dateTime asc".to_string()));
+            qp.push(("$top", top.to_string()));
 
-                let path = if start.is_some() && end.is_some() {
-                    // calendarView requires both startDateTime and endDateTime
-                    qp.push(("startDateTime", start.clone().unwrap()));
-                    qp.push(("endDateTime", end.clone().unwrap()));
-                    format!("{}/calendarView", base.0)
-                } else {
-                    format!("{}/events", base.0)
-                };
+            let path = if start.is_some() && end.is_some() {
+                // calendarView requires both startDateTime and endDateTime
+                qp.push(("startDateTime", start.clone().unwrap()));
+                qp.push(("endDateTime", end.clone().unwrap()));
+                format!("{}/calendarView", base.0)
+            } else {
+                format!("{}/events", base.0)
+            };
 
-                let json = graph_get_json_with_headers_and_query(&token, &path, &headers, &qp).await?;
-                println!("{}", serde_json::to_string_pretty(&json)?);
-        },
-        Commands::EventsBusy { start, end, tz, users, interval } => {
-                if users.is_empty() {
-                    return Err(anyhow!("Provide at least one --user email"));
-                }
-                let token = ensure_login(false).await?;
-                let path = "/v1.0/me/calendar/getSchedule";
-                let prefer = format!("outlook.timezone=\"{}\"", tz);
-                let headers: Vec<(&str, &str)> = vec![("Prefer", prefer.as_str())];
-                let payload = serde_json::json!({
-                    "schedules": users,
-                    "startTime": { "dateTime": start, "timeZone": tz },
-                    "endTime":   { "dateTime": end,   "timeZone": tz },
-                    "availabilityViewInterval": interval,
-                });
-                let json = graph_post_json_with_headers(&token, path, &headers, &payload).await?;
-                println!("{}", serde_json::to_string_pretty(&json)?);
-        },
+            let json = graph_get_json_with_headers_and_query(&token, &path, &headers, &qp).await?;
+            println!("{}", serde_json::to_string_pretty(&json)?);
+        }
+        Commands::EventsBusy {
+            start,
+            end,
+            tz,
+            users,
+            interval,
+        } => {
+            if users.is_empty() {
+                return Err(anyhow!("Provide at least one --user email"));
+            }
+            let token = ensure_login(false).await?;
+            let path = "/v1.0/me/calendar/getSchedule";
+            let prefer = format!("outlook.timezone=\"{}\"", tz);
+            let headers: Vec<(&str, &str)> = vec![("Prefer", prefer.as_str())];
+            let payload = serde_json::json!({
+                "schedules": users,
+                "startTime": { "dateTime": start, "timeZone": tz },
+                "endTime":   { "dateTime": end,   "timeZone": tz },
+                "availabilityViewInterval": interval,
+            });
+            let json = graph_post_json_with_headers(&token, path, &headers, &payload).await?;
+            println!("{}", serde_json::to_string_pretty(&json)?);
+        }
         Commands::EventsCreate {
-                subject,
-                start,
-                end,
-                tz,
-                body,
+            subject,
+            start,
+            end,
+            tz,
+            body,
+            html,
+            attendees,
+            location,
+            calendar,
+        } => {
+            let token = ensure_login(false).await?;
+            let spec = EventCreateSpec {
+                subject: &subject,
+                start: &start,
+                end: &end,
+                tz: &tz,
+                body: body.as_deref(),
                 html,
-                attendees,
-                location,
-                calendar,
-            } => {
-                let token = ensure_login(false).await?;
-                let payload = build_event_payload(
-                    &subject,
-                    &start,
-                    &end,
-                    &tz,
-                    body.as_deref(),
-                    html,
-                    &attendees,
-                    location.as_deref(),
-                );
-                let url = if let Some(name) = calendar {
-                    let cal_id = resolve_calendar_id(&token, &name).await?;
-                    format!("{}/v1.0/me/calendars/{}/events", GRAPH_RESOURCE, cal_id)
-                } else {
-                    format!("{}/v1.0/me/events", GRAPH_RESOURCE)
-                };
+                attendees: &attendees,
+                location: location.as_deref(),
+            };
+            let payload = build_event_payload(&spec);
+            let url = if let Some(name) = calendar {
+                let cal_id = resolve_calendar_id(&token, &name).await?;
+                format!("{}/v1.0/me/calendars/{}/events", GRAPH_RESOURCE, cal_id)
+            } else {
+                format!("{}/v1.0/me/events", GRAPH_RESOURCE)
+            };
 
-                let res = reqwest::Client::new()
-                    .post(&url)
-                    .bearer_auth(&token)
-                    .json(&payload)
-                    .send()
+            let res = reqwest::Client::new()
+                .post(&url)
+                .bearer_auth(&token)
+                .json(&payload)
+                .send()
+                .await
+                .context("POST event failed")?;
+
+            if res.status().is_success() || res.status() == StatusCode::CREATED {
+                let created = res
+                    .json::<serde_json::Value>()
                     .await
-                    .context("POST event failed")?;
+                    .unwrap_or_else(|_| serde_json::json!({"status":"created"}));
+                println!("{}", serde_json::to_string_pretty(&created)?);
+            } else {
+                let status = res.status();
+                let text = res.text().await.unwrap_or_default();
+                return Err(anyhow!("create event error: {} — {}", status, text));
+            }
+        }
 
-                if res.status().is_success() || res.status() == StatusCode::CREATED {
-                    let created = res.json::<serde_json::Value>().await.unwrap_or_else(|_| serde_json::json!({"status":"created"}));
-                    println!("{}", serde_json::to_string_pretty(&created)?);
-                } else {
-                    let status = res.status();
-                    let text = res.text().await.unwrap_or_default();
-                    return Err(anyhow!("create event error: {} — {}", status, text));
-                }
-            },
-        
         Commands::Whoami => {
             let token = ensure_login(false).await?;
             let me = graph_get_json(&token, "/v1.0/me").await?;
             println!("{}", serde_json::to_string_pretty(&me)?);
-        },
+        }
         Commands::FoldersList { top } => {
             let token = ensure_login(false).await?;
             let url = format!("/v1.0/me/mailFolders?$select=displayName,id,childFolderCount,unreadItemCount,totalItemCount&$top={}", top);
@@ -398,21 +417,24 @@ async fn main() -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&json)?);
         }
         Commands::MessagesList { folder, top } => {
-                let token = ensure_login(false).await?;
-                let folder_id = resolve_folder_id(&token, &folder).await?;
-                let url = format!(
+            let token = ensure_login(false).await?;
+            let folder_id = resolve_folder_id(&token, &folder).await?;
+            let url = format!(
                     "/v1.0/me/mailFolders/{}/messages?$select=subject,from,receivedDateTime,isRead,webLink&$orderby=receivedDateTime desc&$top={}",
                     folder_id, top
                 );
-                let json = graph_get_json(&token, &url).await?;
-                println!("{}", serde_json::to_string_pretty(&json)?);
-        },
+            let json = graph_get_json(&token, &url).await?;
+            println!("{}", serde_json::to_string_pretty(&json)?);
+        }
         Commands::MessagesGet { id } => {
-                let token = ensure_login(false).await?;
-                let url = format!("/v1.0/me/messages/{}?$select=subject,from,receivedDateTime,bodyPreview,webLink", id);
-                let json = graph_get_json(&token, &url).await?;
-                println!("{}", serde_json::to_string_pretty(&json)?);
-        },
+            let token = ensure_login(false).await?;
+            let url = format!(
+                "/v1.0/me/messages/{}?$select=subject,from,receivedDateTime,bodyPreview,webLink",
+                id
+            );
+            let json = graph_get_json(&token, &url).await?;
+            println!("{}", serde_json::to_string_pretty(&json)?);
+        }
         Commands::MessagesSearch {
             folder,
             all,
@@ -426,7 +448,7 @@ async fn main() -> Result<()> {
             max_pages,
             sort,
         } => {
-            handle_messages_search(
+            let opts = MessageSearchOpts {
                 folder,
                 all,
                 query,
@@ -438,9 +460,9 @@ async fn main() -> Result<()> {
                 page_size,
                 max_pages,
                 sort,
-            )
-            .await?;
-        },
+            };
+            handle_messages_search(opts).await?;
+        }
         Commands::SendMail {
             to,
             subject,
@@ -465,7 +487,7 @@ async fn main() -> Result<()> {
                 let text = res.text().await.unwrap_or_default();
                 return Err(anyhow!("sendMail error: {} — {}", status, text));
             }
-        },
+        }
     }
 
     Ok(())
@@ -901,7 +923,7 @@ fn collect_items(out: &mut Vec<serde_json::Value>, json: &mut serde_json::Value)
     }
 }
 
-async fn handle_messages_search(
+struct MessageSearchOpts {
     folder: String,
     all: bool,
     query: Option<String>,
@@ -913,21 +935,26 @@ async fn handle_messages_search(
     page_size: u32,
     max_pages: u32,
     sort: Sort,
-) -> Result<()> {
+}
+
+async fn handle_messages_search(opts: MessageSearchOpts) -> Result<()> {
     let token = ensure_login(false).await?;
     // Prevent mixing raw --query with structured flags
-    let using_structured = from.is_some() || subject_contains.is_some() || unread || since.is_some();
-    if query.is_some() && using_structured {
+    let using_structured = opts.from.is_some()
+        || opts.subject_contains.is_some()
+        || opts.unread
+        || opts.since.is_some();
+    if opts.query.is_some() && using_structured {
         return Err(anyhow!(
             "Do not combine --query with structured flags (use one mode)"
         ));
     }
 
     // Determine path (all mailbox vs specific folder)
-    let base_path: String = if all {
+    let base_path: String = if opts.all {
         "/v1.0/me/messages".to_string()
     } else {
-        let folder_id = resolve_folder_id(&token, &folder).await?;
+        let folder_id = resolve_folder_id(&token, &opts.folder).await?;
         format!("/v1.0/me/mailFolders/{}/messages", folder_id)
     };
 
@@ -938,19 +965,19 @@ async fn handle_messages_search(
         "subject,from,receivedDateTime,isRead,webLink".to_string(),
     ));
     // Use page_size for server page size when paging. We'll trim to `top` after sorting/filtering.
-    qp.push(("$top", page_size.to_string()));
+    qp.push(("$top", opts.page_size.to_string()));
 
     let mut headers: Vec<(&str, &str)> = Vec::new();
 
     // Decide mode: explicit $search, or implicit $search if subject_contains/from used, otherwise $filter
-    let mut use_search = query.is_some();
+    let mut use_search = opts.query.is_some();
     let mut search_terms: Vec<String> = Vec::new();
-    if query.is_none() {
-        if let Some(sub) = &subject_contains {
+    if opts.query.is_none() {
+        if let Some(sub) = &opts.subject_contains {
             use_search = true; // prefer $search for subject contains to avoid InefficientFilter
             search_terms.push(format!("subject:{}", sub));
         }
-        if let Some(f) = &from {
+        if let Some(f) = &opts.from {
             use_search = true; // prefer $search for sender
             search_terms.push(format!("from:{}", f));
         }
@@ -959,7 +986,7 @@ async fn handle_messages_search(
     if use_search {
         headers.push(("ConsistencyLevel", "eventual"));
         qp.push(("$count", "true".to_string()));
-        let q = if let Some(q) = query {
+        let q = if let Some(q) = opts.query {
             q
         } else {
             search_terms.join(" AND ")
@@ -972,18 +999,18 @@ async fn handle_messages_search(
         let mut items: Vec<serde_json::Value> = Vec::new();
         let mut page_count = 0u32;
         // First request
-        let mut page = graph_get_json_with_headers_and_query(&token, &base_path, &headers, &qp)
-            .await?;
+        let mut page =
+            graph_get_json_with_headers_and_query(&token, &base_path, &headers, &qp).await?;
         page_count += 1;
         collect_items(&mut items, &mut page);
         let mut next_link = page
             .get("@odata.nextLink")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
-        while items.len() < (top as usize) && page_count < max_pages {
+        while items.len() < (opts.top as usize) && page_count < opts.max_pages {
             if let Some(link) = next_link.clone() {
-                let mut next = graph_get_json_absolute_with_headers(&token, &link, &headers)
-                    .await?;
+                let mut next =
+                    graph_get_json_absolute_with_headers(&token, &link, &headers).await?;
                 page_count += 1;
                 collect_items(&mut items, &mut next);
                 next_link = next
@@ -999,35 +1026,34 @@ async fn handle_messages_search(
         }
 
         // Apply client filters
-        let items = apply_client_filters_vec(items, unread, since.as_deref())?;
+        let items = apply_client_filters_vec(items, opts.unread, opts.since.as_deref())?;
         // Local sort
         let mut items = items;
-        sort_items_by_received(&mut items, matches!(sort, Sort::DateAsc));
+        sort_items_by_received(&mut items, matches!(opts.sort, Sort::DateAsc));
         // Trim to top
-        let items: Vec<_> = items.into_iter().take(top as usize).collect();
+        let items: Vec<_> = items.into_iter().take(opts.top as usize).collect();
         let out = serde_json::json!({"value": items});
         println!("{}", serde_json::to_string_pretty(&out)?);
     } else {
         // $filter mode (unread/since/from only). Safe to use $orderby.
         qp.push(("$orderby", "receivedDateTime desc".to_string()));
         let mut filters: Vec<String> = Vec::new();
-        if unread {
+        if opts.unread {
             filters.push("isRead eq false".to_string());
         }
-        if let Some(f) = from {
+        if let Some(f) = opts.from {
             filters.push(format!(
                 "from/emailAddress/address eq '{}'",
                 escape_single_quotes(&f)
             ));
         }
-        if let Some(s) = since {
+        if let Some(s) = opts.since {
             filters.push(format!("receivedDateTime ge {}", s));
         }
         if !filters.is_empty() {
             qp.push(("$filter", filters.join(" and ")));
         }
-        let json = graph_get_json_with_headers_and_query(&token, &base_path, &headers, &qp)
-            .await?;
+        let json = graph_get_json_with_headers_and_query(&token, &base_path, &headers, &qp).await?;
         println!("{}", serde_json::to_string_pretty(&json)?);
     }
 
@@ -1046,7 +1072,10 @@ async fn graph_post_json_with_headers(
     for (k, v) in headers {
         req = req.header(*k, *v);
     }
-    let res = req.send().await.with_context(|| format!("POST {} failed", path))?;
+    let res = req
+        .send()
+        .await
+        .with_context(|| format!("POST {} failed", path))?;
     if res.status().is_success() {
         Ok(res.json().await.context("parse JSON")?)
     } else if res.status() == StatusCode::UNAUTHORIZED {
@@ -1153,17 +1182,20 @@ async fn resolve_calendar_id(access_token: &str, display_name: &str) -> Result<S
     Err(anyhow!("Calendar '{}' not found", display_name))
 }
 
-fn build_event_payload(
-    subject: &str,
-    start: &str,
-    end: &str,
-    tz: &str,
-    body: Option<&str>,
+struct EventCreateSpec<'a> {
+    subject: &'a str,
+    start: &'a str,
+    end: &'a str,
+    tz: &'a str,
+    body: Option<&'a str>,
     html: bool,
-    attendees: &[String],
-    location: Option<&str>,
-) -> serde_json::Value {
-    let attendee_list: Vec<serde_json::Value> = attendees
+    attendees: &'a [String],
+    location: Option<&'a str>,
+}
+
+fn build_event_payload(spec: &EventCreateSpec) -> serde_json::Value {
+    let attendee_list: Vec<serde_json::Value> = spec
+        .attendees
         .iter()
         .map(|addr| {
             serde_json::json!({
@@ -1173,18 +1205,21 @@ fn build_event_payload(
         })
         .collect();
 
-    let content_type = if html { "HTML" } else { "Text" };
-    let body_obj = body.map(|b| serde_json::json!({ "contentType": content_type, "content": b })).unwrap_or_else(|| serde_json::json!({ "contentType": content_type, "content": "" }));
+    let content_type = if spec.html { "HTML" } else { "Text" };
+    let body_obj = spec
+        .body
+        .map(|b| serde_json::json!({ "contentType": content_type, "content": b }))
+        .unwrap_or_else(|| serde_json::json!({ "contentType": content_type, "content": "" }));
 
     let mut ev = serde_json::json!({
-        "subject": subject,
+        "subject": spec.subject,
         "body": body_obj,
-        "start": { "dateTime": start, "timeZone": tz },
-        "end":   { "dateTime": end,   "timeZone": tz },
+        "start": { "dateTime": spec.start, "timeZone": spec.tz },
+        "end":   { "dateTime": spec.end,   "timeZone": spec.tz },
         "attendees": attendee_list,
     });
 
-    if let Some(loc) = location {
+    if let Some(loc) = spec.location {
         if let Some(obj) = ev.as_object_mut() {
             obj.insert(
                 "location".to_string(),
