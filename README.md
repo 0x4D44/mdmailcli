@@ -53,6 +53,13 @@ Run interactive init to store config and sign in:
 
 - `cargo run -- init`
 
+Reconfigure or add scopes later:
+
+- Force re-prompt (tenant, client_id, scopes prefilled):
+  - `cargo run -- init --force`
+- Set scopes non-interactively (keeps tenant/client_id):
+  - `cargo run -- init --scopes "offline_access User.Read Mail.Read Mail.ReadWrite Mail.Send Calendars.Read Calendars.ReadWrite"`
+
 Prompts:
 - `tenant` → default is `common`; set to your tenant ID or domain if single‑tenant
 - `client_id` → paste your app registration's Application (client) ID
@@ -110,8 +117,9 @@ Common flags:
 Notes:
 - If you haven’t run `init`, most commands will prompt you to authenticate.
 - Access tokens auto‑refresh using the stored refresh token.
- - For events, primary calendar is used by default. Use `--calendar <name>` to target a specific calendar (case‑insensitive). Common aliases like `primary`, `default`, or `calendar` resolve to the primary calendar.
+  - For events, primary calendar is used by default. Use `--calendar <name>` to target a specific calendar (case‑insensitive). Common aliases like `primary`, `default`, or `calendar` resolve to the primary calendar.
   - For date‑range listing, both `--start` and `--end` are required and use the `calendarView` endpoint. The `--tz` flag controls the returned time zone (header `Prefer: outlook.timezone="..."`).
+ - To add calendar permissions after first run, either re-init with `--force` (interactive) or set scopes directly with `--scopes` and run `init` to trigger consent.
 
 ## Troubleshooting
 

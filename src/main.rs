@@ -51,8 +51,20 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Initialize auth (and store config) — prompts if missing/invalid
-    Init,
+    /// Initialize auth (and store config)
+    ///
+    /// - Default: validates config and signs in (device code).
+    /// - --force: re-prompt tenant/client_id/scopes with current values as defaults.
+    /// - --scopes: set scopes non-interactively (space-separated), then sign in.
+    Init {
+        /// Re-prompt tenant, client_id, and scopes (pre-filled with current values)
+        #[arg(long, default_value_t = false)]
+        force: bool,
+        /// Overwrite scopes (space-separated). Example:
+        ///   --scopes "offline_access User.Read Mail.Read Mail.ReadWrite Mail.Send Calendars.Read Calendars.ReadWrite"
+        #[arg(long)]
+        scopes: Option<String>,
+    },
 
     /// Show the signed-in user’s identity
     Whoami,
@@ -238,8 +250,24 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Init => {
-            ensure_login(true).await?; // force interactive if needed
+        Commands::Init { force, scopes } => {
+            // Optional non-interactive scopes override
+            if scopes.is_some() || force {
+                let mut cfg = load_config()?;
+                if let Some(s) = scopes {
+                    let new_scopes: Vec<String> = s
+                        .split_whitespace()
+                        .map(|x| x.to_string())
+                        .collect();
+                    cfg.scopes = new_scopes;
+                }
+                if force {
+                    // Re-prompt with current values as defaults
+                    cfg = prompt_for_config(cfg)?;
+                }
+                save_config(&cfg)?;
+            }
+            ensure_login(true).await?; // device code login (fresh consent if scopes changed)
             println!("✅ Initialized and signed in.");
         }
         Commands::Calendars { cmd } => match cmd {
@@ -614,15 +642,22 @@ fn prompt_for_config(mut cfg: AppConfig) -> Result<AppConfig> {
 
     // Client ID
     println!("Application (client) ID from Entra app registration (e.g. 11111111-2222-3333-4444-555555555555)");
+    if !cfg.client_id.trim().is_empty() {
+        println!("Default: {}", cfg.client_id);
+    }
     print!("client_id> ");
     io::stdout().flush().ok();
     let mut c = String::new();
     io::stdin().read_line(&mut c).ok();
     let c = c.trim();
     if c.is_empty() {
-        return Err(anyhow!("client_id is required"));
+        if cfg.client_id.trim().is_empty() {
+            return Err(anyhow!("client_id is required"));
+        }
+        // keep existing
+    } else {
+        cfg.client_id = c.to_string();
     }
-    cfg.client_id = c.to_string();
 
     // Scopes
     println!("Scopes (space-separated). Typical: offline_access User.Read Mail.Read Mail.ReadWrite Mail.Send Calendars.Read Calendars.ReadWrite");
