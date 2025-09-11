@@ -12,6 +12,10 @@ const RT_ACCOUNT: &str = "refresh_token"; // key for refresh token
 
 const GRAPH_RESOURCE: &str = "https://graph.microsoft.com";
 
+fn graph_base_url() -> String {
+    std::env::var("MDMAILCLI_GRAPH_BASE_URL").unwrap_or_else(|_| GRAPH_RESOURCE.to_string())
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct AppConfig {
     tenant: String,    // e.g. "common", "organizations", "consumers", or your tenant GUID
@@ -377,12 +381,12 @@ async fn main() -> Result<()> {
                 location: location.as_deref(),
             };
             let payload = build_event_payload(&spec);
-            let url = if let Some(name) = calendar {
-                let cal_id = resolve_calendar_id(&token, &name).await?;
-                format!("{}/v1.0/me/calendars/{}/events", GRAPH_RESOURCE, cal_id)
-            } else {
-                format!("{}/v1.0/me/events", GRAPH_RESOURCE)
-            };
+                let url = if let Some(name) = calendar {
+                    let cal_id = resolve_calendar_id(&token, &name).await?;
+                    format!("{}/v1.0/me/calendars/{}/events", graph_base_url(), cal_id)
+                } else {
+                    format!("{}/v1.0/me/events", graph_base_url())
+                };
 
             let res = reqwest::Client::new()
                 .post(&url)
@@ -471,7 +475,7 @@ async fn main() -> Result<()> {
         } => {
             let token = ensure_login(false).await?;
             let payload = build_send_payload(&to, &subject, &body, html);
-            let url = format!("{}/v1.0/me/sendMail", GRAPH_RESOURCE);
+            let url = format!("{}/v1.0/me/sendMail", graph_base_url());
             let res = reqwest::Client::new()
                 .post(&url)
                 .bearer_auth(&token)
@@ -496,6 +500,9 @@ async fn main() -> Result<()> {
 // ---------- Auth & Storage ----------
 
 async fn ensure_login(force_interactive: bool) -> Result<String> {
+    if let Ok(tok) = std::env::var("MDMAILCLI_TEST_ACCESS_TOKEN") {
+        return Ok(tok);
+    }
     // 1) Load config
     let mut cfg = load_config()?;
 
@@ -783,7 +790,7 @@ async fn refresh_access_token(cfg: &AppConfig, refresh_token: &str) -> Result<St
 // ---------- Graph helpers ----------
 
 async fn graph_get_json(access_token: &str, path_and_query: &str) -> Result<serde_json::Value> {
-    let url = format!("{}{}", GRAPH_RESOURCE, path_and_query);
+    let url = format!("{}{}", graph_base_url(), path_and_query);
     let res = reqwest::Client::new()
         .get(&url)
         .bearer_auth(access_token)
@@ -809,7 +816,7 @@ async fn graph_get_json_with_headers_and_query(
     headers: &[(&str, &str)],
     query: &[(&str, String)],
 ) -> Result<serde_json::Value> {
-    let url = format!("{}{}", GRAPH_RESOURCE, path);
+    let url = format!("{}{}", graph_base_url(), path);
     let client = reqwest::Client::new();
     let mut req = client.get(&url).bearer_auth(access_token);
     for (k, v) in headers {
@@ -1066,7 +1073,7 @@ async fn graph_post_json_with_headers(
     headers: &[(&str, &str)],
     payload: &serde_json::Value,
 ) -> Result<serde_json::Value> {
-    let url = format!("{}{}", GRAPH_RESOURCE, path);
+    let url = format!("{}{}", graph_base_url(), path);
     let client = reqwest::Client::new();
     let mut req = client.post(&url).bearer_auth(access_token).json(payload);
     for (k, v) in headers {
@@ -1229,4 +1236,106 @@ fn build_event_payload(spec: &EventCreateSpec) -> serde_json::Value {
     }
 
     ev
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    fn v_str(map: &[(&str, &str)]) -> serde_json::Value {
+        let mut obj = serde_json::Map::new();
+        for (k, v) in map {
+            obj.insert((*k).to_string(), serde_json::Value::String((*v).to_string()));
+        }
+        serde_json::Value::Object(obj)
+    }
+
+    #[test]
+    fn escapes_single_quotes() {
+        let s = "O'Hara's schedule";
+        let out = escape_single_quotes(s);
+        assert_eq!(out, "O''Hara''s schedule");
+    }
+
+    #[test]
+    fn client_filters_unread_and_since() {
+        // Two unread (one before since, one after) and one read after since
+        let items = vec![
+            serde_json::json!({"isRead": false, "receivedDateTime": "2024-01-01T12:00:00Z"}),
+            serde_json::json!({"isRead": false, "receivedDateTime": "2024-01-03T08:00:00Z"}),
+            serde_json::json!({"isRead": true,  "receivedDateTime": "2024-01-03T09:00:00Z"}),
+        ];
+        let out = apply_client_filters_vec(items, true, Some("2024-01-02T00:00:00Z")).unwrap();
+        // Only the unread message on/after since should remain (the one at 2024-01-03T08:00:00Z)
+        assert_eq!(out.len(), 1);
+        assert_eq!(
+            out[0].get("receivedDateTime").and_then(|v| v.as_str()),
+            Some("2024-01-03T08:00:00Z")
+        );
+    }
+
+    #[test]
+    fn sort_by_received_asc_desc() {
+        let mut items = vec![
+            v_str(&[("receivedDateTime", "2024-01-03T08:00:00Z")]),
+            v_str(&[("receivedDateTime", "2024-01-01T12:00:00Z")]),
+            v_str(&[("receivedDateTime", "2024-01-02T00:00:00Z")]),
+        ];
+        // Ascending
+        sort_items_by_received(&mut items, true);
+        let asc: Vec<_> = items
+            .iter()
+            .map(|x| x.get("receivedDateTime").and_then(|v| v.as_str()).unwrap())
+            .collect();
+        assert_eq!(
+            asc,
+            vec![
+                "2024-01-01T12:00:00Z",
+                "2024-01-02T00:00:00Z",
+                "2024-01-03T08:00:00Z"
+            ]
+        );
+        // Descending
+        sort_items_by_received(&mut items, false);
+        let desc: Vec<_> = items
+            .iter()
+            .map(|x| x.get("receivedDateTime").and_then(|v| v.as_str()).unwrap())
+            .collect();
+        assert_eq!(
+            desc,
+            vec![
+                "2024-01-03T08:00:00Z",
+                "2024-01-02T00:00:00Z",
+                "2024-01-01T12:00:00Z"
+            ]
+        );
+    }
+
+    #[test]
+    fn top_level_help_contains_all_commands() {
+        let mut cmd = Cli::command();
+        let mut buf = Vec::new();
+        cmd.write_long_help(&mut buf).unwrap();
+        let help = String::from_utf8(buf).unwrap();
+        for needle in [
+            "whoami",
+            "init",
+            "folders-list",
+            "messages-list",
+            "messages-get",
+            "messages-search",
+            "send-mail",
+            "calendars-list",
+            "events-list",
+            "events-create",
+            "events-busy",
+        ] {
+            assert!(help.contains(needle), "missing in help: {}", needle);
+        }
+        // Spot-check examples strings
+        assert!(help.contains("events-list --calendar \"Team Calendar\""));
+        assert!(help.contains("messages-search --all --query"));
+        assert!(help.contains("send-mail --to"));
+    }
 }
