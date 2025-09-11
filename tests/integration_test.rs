@@ -120,6 +120,13 @@ fn send_mail_accepts_202() {
 
     let mut cmd = Command::cargo_bin("mdmailcli").unwrap();
     common_env(&mut cmd, &server);
-    cmd.args(["send-mail", "--subject", "Hello", "--body", "Hi there", "user@example.com"]);
+    cmd.args([
+        "send-mail",
+        "--subject",
+        "Hello",
+        "--body",
+        "Hi there",
+        "user@example.com",
+    ]);
     cmd.assert().success();
 }

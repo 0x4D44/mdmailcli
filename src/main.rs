@@ -381,12 +381,12 @@ async fn main() -> Result<()> {
                 location: location.as_deref(),
             };
             let payload = build_event_payload(&spec);
-                let url = if let Some(name) = calendar {
-                    let cal_id = resolve_calendar_id(&token, &name).await?;
-                    format!("{}/v1.0/me/calendars/{}/events", graph_base_url(), cal_id)
-                } else {
-                    format!("{}/v1.0/me/events", graph_base_url())
-                };
+            let url = if let Some(name) = calendar {
+                let cal_id = resolve_calendar_id(&token, &name).await?;
+                format!("{}/v1.0/me/calendars/{}/events", graph_base_url(), cal_id)
+            } else {
+                format!("{}/v1.0/me/events", graph_base_url())
+            };
 
             let res = reqwest::Client::new()
                 .post(&url)
@@ -1246,7 +1246,10 @@ mod tests {
     fn v_str(map: &[(&str, &str)]) -> serde_json::Value {
         let mut obj = serde_json::Map::new();
         for (k, v) in map {
-            obj.insert((*k).to_string(), serde_json::Value::String((*v).to_string()));
+            obj.insert(
+                (*k).to_string(),
+                serde_json::Value::String((*v).to_string()),
+            );
         }
         serde_json::Value::Object(obj)
     }
